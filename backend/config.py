@@ -36,8 +36,8 @@ def get_settings() -> dict[str, object]:
         "database_url": os.getenv("DATABASE_URL", "sqlite:///./app.db"),
         "sqlalchemy_echo": _get_bool("SQLALCHEMY_ECHO"),
         "gemini_api_key": os.getenv("GEMINI_API_KEY"),
+        "google_agentplatform_api_key": os.getenv("GOOGLE_AGENTPLATFORM_API_KEY"),
         "gemini_model": os.getenv("GEMINI_MODEL", "gemini-3.5-flash"),
         "session_ttl_seconds": _get_int("SESSION_TTL_SECONDS", "604800"),
         "cors_origins": _get_csv("CORS_ORIGINS", DEFAULT_CORS_ORIGINS),
     }
-

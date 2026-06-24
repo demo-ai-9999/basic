@@ -113,3 +113,15 @@ class ChatReplyResponse(BaseModel):
     answer: str
     user_message_id: int
     assistant_message_id: int
+
+
+class SearchResult(BaseModel):
+    title: str
+    link: str
+    snippet: str
+
+
+class SearchResponse(BaseModel):
+    query: str
+    answer: str
+    results: list[SearchResult]
