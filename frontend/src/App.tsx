@@ -1,125 +1,254 @@
 import { useEffect, useState } from 'react'
-import type { FormEvent } from 'react'
+import { CssBaseline, ThemeProvider, createTheme } from '@mui/material'
+import {
+  ApiError,
+  clearAuthStorage,
+  getCurrentUser,
+  loadStoredToken,
+  loadStoredUser,
+  logout,
+  storeAuth,
+  type User,
+} from './api'
+import ChatLayout from './pages/ChatLayout'
+import LoginPage from './pages/LoginPage'
+import NotFoundPage from './pages/NotFoundPage'
+import PrivateRoute from './components/PrivateRoute'
+import RegisterPage from './pages/RegisterPage'
 import './App.css'
 
-type BackendMessage = {
-  status: string
+type RouteName = 'login' | 'signup' | 'chat' | 'not-found'
+type AuthState = 'loading' | 'signed-out' | 'signed-in'
+
+const theme = createTheme({
+  palette: {
+    primary: {
+      main: '#0f766e',
+    },
+    secondary: {
+      main: '#0ea5e9',
+    },
+  },
+  shape: {
+    borderRadius: 16,
+  },
+  typography: {
+    fontFamily:
+      "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  },
+})
+
+function resolveRoute(pathname: string): RouteName {
+  if (pathname === '/signup') return 'signup'
+  if (pathname === '/chat') return 'chat'
+  if (pathname === '/login' || pathname === '/') return 'login'
+  return 'not-found'
 }
 
-type ChatResponse = {
-  answer: string
+function pathForRoute(route: Exclude<RouteName, 'not-found'>) {
+  return route === 'login' ? '/login' : `/${route}`
 }
 
 function App() {
-  const [backendStatus, setBackendStatus] = useState('백엔드 연결 확인 중...')
-  const [backendError, setBackendError] = useState<string | null>(null)
-  const [question, setQuestion] = useState('')
-  const [answer, setAnswer] = useState('')
-  const [chatError, setChatError] = useState<string | null>(null)
-  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [route, setRoute] = useState<RouteName>(() => resolveRoute(window.location.pathname))
+  const [authState, setAuthState] = useState<AuthState>('loading')
+  const [token, setToken] = useState<string | null>(() => loadStoredToken())
+  const [user, setUser] = useState<User | null>(() => loadStoredUser())
+  const [authNotice, setAuthNotice] = useState<string | null>(null)
+  const [loginPrefill, setLoginPrefill] = useState('')
 
   useEffect(() => {
-    const controller = new AbortController()
+    const onPopState = () => {
+      setRoute(resolveRoute(window.location.pathname))
+    }
 
-    const loadMessage = async () => {
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+
+  useEffect(() => {
+    const currentRoute = resolveRoute(window.location.pathname)
+    if (currentRoute !== route) {
+      setRoute(currentRoute)
+    }
+  }, [route])
+
+  useEffect(() => {
+    let active = true
+
+    const bootstrapAuth = async () => {
+      if (!token) {
+        if (!active) return
+        setUser(null)
+        setAuthState('signed-out')
+        return
+      }
+
       try {
-        const response = await fetch('/api/', {
-          signal: controller.signal,
-        })
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`)
-        }
-
-        const data = (await response.json()) as BackendMessage
-        setBackendStatus(`백엔드 응답: ${data.status}`)
-        setBackendError(null)
-      } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') {
-          return
-        }
-
-        setBackendStatus('백엔드 응답을 불러오지 못했습니다.')
-        setBackendError(err instanceof Error ? err.message : 'unknown error')
+        const currentUser = await getCurrentUser(token)
+        if (!active) return
+        setUser(currentUser)
+        setAuthState('signed-in')
+        storeAuth(token, currentUser)
+      } catch (error) {
+        if (!active) return
+        clearAuthStorage()
+        setToken(null)
+        setUser(null)
+        setAuthState('signed-out')
+        setAuthNotice(
+          error instanceof ApiError && error.status === 401
+            ? '세션이 만료되어 다시 로그인해 주세요.'
+            : '로그인 상태를 확인하지 못했습니다.',
+        )
       }
     }
 
-    loadMessage()
+    setAuthState('loading')
+    bootstrapAuth()
 
-    return () => controller.abort()
-  }, [])
+    return () => {
+      active = false
+    }
+  }, [token])
 
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-
-    const trimmedQuestion = question.trim()
-    if (!trimmedQuestion || isSubmitting) {
+  useEffect(() => {
+    if (authState === 'loading') {
       return
     }
 
-    setIsSubmitting(true)
-    setChatError(null)
-    setAnswer('')
-
-    try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ question: trimmedQuestion }),
-      })
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
+    if (authState === 'signed-in') {
+      if (route !== 'chat') {
+        window.history.replaceState({}, '', pathForRoute('chat'))
+        setRoute('chat')
       }
+      return
+    }
 
-      const data = (await response.json()) as ChatResponse
-      setAnswer(data.answer)
-    } catch (err) {
-      setChatError(err instanceof Error ? err.message : 'unknown error')
+    if (route === 'chat') {
+      window.history.replaceState({}, '', pathForRoute('login'))
+      setRoute('login')
+      return
+    }
+
+    if (route === 'not-found') {
+      window.history.replaceState({}, '', pathForRoute('login'))
+      setRoute('login')
+    }
+  }, [authState, route])
+
+  const handleNavigate = (nextRoute: Exclude<RouteName, 'not-found'>) => {
+    window.history.pushState({}, '', pathForRoute(nextRoute))
+    setRoute(nextRoute)
+  }
+
+  const handleLoginSuccess = (nextToken: string, nextUser: User) => {
+    storeAuth(nextToken, nextUser)
+    setToken(nextToken)
+    setUser(nextUser)
+    setAuthNotice(null)
+    setLoginPrefill('')
+    window.history.replaceState({}, '', pathForRoute('chat'))
+    setRoute('chat')
+    setAuthState('signed-in')
+  }
+
+  const handleLogout = async () => {
+    try {
+      await logout(token)
     } finally {
-      setIsSubmitting(false)
+      clearAuthStorage()
+      setToken(null)
+      setUser(null)
+      setAuthState('signed-out')
+      setAuthNotice('로그아웃되었습니다.')
+      window.history.replaceState({}, '', pathForRoute('login'))
+      setRoute('login')
     }
   }
 
-  return (
-    <main className="app-shell">
-      <section className="hero-panel">
-        <div className="hero-copy">
-          <p className="eyebrow">Gemini Chat</p>
-          <h1>질문을 보내고 답변을 바로 받아보세요</h1>
-          <p className="lead">{backendStatus}</p>
-          {backendError ? <p className="error">에러: {backendError}</p> : null}
-        </div>
+  const handleSignUpSuccess = (username: string) => {
+    setLoginPrefill(username)
+    setAuthNotice('회원가입이 완료되었습니다. 바로 로그인해 주세요.')
+    handleNavigate('login')
+  }
 
-        <form className="chat-form" onSubmit={handleSubmit}>
-          <label className="field-label" htmlFor="question">
-            질문
-          </label>
-          <textarea
-            id="question"
-            className="question-input"
-            value={question}
-            onChange={(event) => setQuestion(event.target.value)}
-            placeholder="Gemini에게 물어볼 내용을 입력하세요."
-            rows={6}
-          />
-          <div className="actions">
-            <button type="submit" disabled={isSubmitting || !question.trim()}>
-              {isSubmitting ? '전송 중...' : '질문 보내기'}
-            </button>
-          </div>
-        </form>
+  const handleSessionExpired = () => {
+    clearAuthStorage()
+    setToken(null)
+    setUser(null)
+    setAuthState('signed-out')
+    setAuthNotice('세션이 만료되어 다시 로그인해 주세요.')
+    window.history.replaceState({}, '', pathForRoute('login'))
+    setRoute('login')
+  }
 
-        <section className="response-panel" aria-live="polite">
-          <p className="response-label">응답</p>
-          {chatError ? <p className="error">에러: {chatError}</p> : null}
-          {answer ? <pre className="answer">{answer}</pre> : <p className="empty">아직 받은 답변이 없습니다.</p>}
+  if (authState === 'loading') {
+    return (
+      <main className="app-shell">
+        <section className="loading-panel">
+          <p className="eyebrow">My Project</p>
+          <h1>로그인 상태를 확인하는 중입니다.</h1>
+          <p className="muted">잠시만 기다려 주세요.</p>
         </section>
-      </section>
-    </main>
+      </main>
+    )
+  }
+
+  if (route === 'signup') {
+    return (
+      <RegisterPage
+        notice={authNotice}
+        onSuccess={handleSignUpSuccess}
+        onGoLogin={() => handleNavigate('login')}
+      />
+    )
+  }
+
+  if (route === 'login') {
+    return (
+      <LoginPage
+        prefillUsername={loginPrefill}
+        notice={authNotice}
+        onSuccess={handleLoginSuccess}
+        onGoSignUp={() => handleNavigate('signup')}
+      />
+    )
+  }
+
+  if (route === 'not-found') {
+    return <NotFoundPage />
+  }
+
+  return (
+    <PrivateRoute
+      isAllowed={authState === 'signed-in' && Boolean(token)}
+      fallback={
+        <LoginPage
+          prefillUsername={loginPrefill}
+          notice={authNotice}
+          onSuccess={handleLoginSuccess}
+          onGoSignUp={() => handleNavigate('signup')}
+        />
+      }
+    >
+      <ChatLayout
+        token={token ?? ''}
+        user={user}
+        onLogout={handleLogout}
+        onSessionExpired={handleSessionExpired}
+      />
+    </PrivateRoute>
   )
 }
 
-export default App
+function AppWithTheme() {
+  return (
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <App />
+    </ThemeProvider>
+  )
+}
+
+export default AppWithTheme
